@@ -16,7 +16,7 @@ VOICE_URL = "https://voicelime.com/voice-generator"
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام علی 👋\n\n"
-        "یک جمله انگلیسی بفرست تا Voiceهای انگلیسی را پیدا کنم 🎙️"
+        "یک جمله انگلیسی بفرست تا Voiceهای VoiceLime را بررسی کنم 🎙️"
     )
 
 
@@ -32,18 +32,18 @@ async def generate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "🇺🇸 در حال بررسی Voiceهای English (United States)..."
+        "🔎 در حال پیدا کردن منوی Voice..."
     )
 
     try:
 
         async with async_playwright() as p:
 
-            browser = await p.chromium.launch(headless=True)
-
-            page = await browser.new_page(
-                accept_downloads=True
+            browser = await p.chromium.launch(
+                headless=True
             )
+
+            page = await browser.new_page()
 
             await page.goto(
                 VOICE_URL,
@@ -51,7 +51,7 @@ async def generate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 timeout=60000
             )
 
-            # قبول کوکی‌ها
+            # قبول کوکی
             accept = page.get_by_role(
                 "button",
                 name="Accept All"
@@ -63,9 +63,7 @@ async def generate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 except Exception:
                     pass
 
-            await page.wait_for_timeout(2000)
-
-            # انتخاب English United States
+            # انتخاب زبان انگلیسی آمریکا
             language = page.locator(
                 "#languageSelect"
             )
@@ -74,28 +72,35 @@ async def generate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 "en-US"
             )
 
-            # صبر برای تغییر Voiceها
-            await page.wait_for_timeout(2000)
+            # صبر برای JavaScript
+            await page.wait_for_timeout(5000)
 
-            # پیدا کردن تمام select ها
-            selects = await page.locator(
+            # پیدا کردن همه select ها
+            select_count = await page.locator(
                 "select"
             ).count()
 
-            result = []
+            message = (
+                f"🎙 بررسی Voiceها\n\n"
+                f"تعداد SELECTها: {select_count}\n\n"
+            )
 
-            for i in range(selects):
+            for i in range(select_count):
 
                 select = page.locator(
                     "select"
                 ).nth(i)
 
                 info = await select.evaluate(
-                    """e => ({
-                        id: e.id,
-                        name: e.name,
-                        value: e.value
-                    })"""
+                    """
+                    e => ({
+                        id: e.id || '',
+                        name: e.name || '',
+                        value: e.value || '',
+                        disabled: e.disabled,
+                        hidden: e.hidden
+                    })
+                    """
                 )
 
                 options = await select.locator(
@@ -103,54 +108,46 @@ async def generate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 ).evaluate_all(
                     """
                     els => els.map(e => ({
-                        text: e.textContent.trim(),
-                        value: e.value
+                        text: (e.textContent || '').trim(),
+                        value: e.value || '',
+                        disabled: e.disabled
                     }))
                     """
                 )
 
-                result.append(
-                    {
-                        "index": i,
-                        "info": info,
-                        "options": options
-                    }
+                message += (
+                    f"━━━━━━━━━━━━━━\n"
+                    f"SELECT #{i}\n"
+                    f"ID: {info['id']}\n"
+                    f"Name: {info['name']}\n"
+                    f"Value: {info['value']}\n"
+                    f"Disabled: {info['disabled']}\n"
+                    f"Hidden: {info['hidden']}\n"
+                    f"Options: {len(options)}\n\n"
                 )
 
-            message = "🎙 Voiceهای English (United States):\n\n"
-
-            found = False
-
-            for item in result:
-
-                options = item["options"]
-
-                if len(options) > 1:
-
-                    found = True
+                for option in options[:30]:
 
                     message += (
-                        f"SELECT #{item['index']}\n"
-                        f"ID: {item['info']['id']}\n\n"
+                        f"• {option['text']}\n"
+                        f"  value={option['value']}\n"
                     )
 
-                    for option in options:
+                if len(options) > 30:
+                    message += (
+                        f"\n... و "
+                        f"{len(options) - 30} گزینه دیگر\n"
+                    )
 
-                        message += (
-                            f"• {option['text']}\n"
-                            f"  value: {option['value']}\n\n"
-                        )
+                message += "\n"
 
-            if not found:
-
-                message += (
-                    "⚠️ Voice بعد از انتخاب زبان "
-                    "به صورت SELECT پیدا نشد.\n\n"
-                    "باید روش دیگری برای شناسایی Voiceها استفاده کنیم."
+            if len(message) > 3900:
+                message = message[:3900] + (
+                    "\n\n⚠️ ادامه اطلاعات زیاد بود."
                 )
 
             await update.message.reply_text(
-                message[:4000]
+                message
             )
 
             await browser.close()
@@ -168,7 +165,10 @@ def main():
     app = Application.builder().token(TOKEN).build()
 
     app.add_handler(
-        CommandHandler("start", start)
+        CommandHandler(
+            "start",
+            start
+        )
     )
 
     app.add_handler(

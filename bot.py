@@ -23,10 +23,11 @@ async def generate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
 
-    await update.message.reply_text("🔎 در حال بررسی VoiceLime...")
+    await update.message.reply_text("🔎 در حال بررسی کنترل‌های VoiceLime...")
 
     async with async_playwright() as p:
         browser = await p.chromium.launch(headless=True)
+
         page = await browser.new_page()
 
         await page.goto(
@@ -35,19 +36,43 @@ async def generate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
             timeout=60000
         )
 
-        title = await page.title()
-
-        inputs = await page.locator("input").count()
-        textareas = await page.locator("textarea").count()
-        buttons = await page.locator("button").count()
-
-        await update.message.reply_text(
-            f"✅ صفحه باز شد.\n\n"
-            f"Title: {title}\n"
-            f"Input: {inputs}\n"
-            f"Textarea: {textareas}\n"
-            f"Button: {buttons}"
+        textarea_info = await page.locator("textarea").evaluate_all(
+            """els => els.map((e, i) => ({
+                index: i,
+                placeholder: e.placeholder,
+                aria: e.getAttribute('aria-label')
+            }))"""
         )
+
+        button_info = await page.locator("button").evaluate_all(
+            """els => els.map((e, i) => ({
+                index: i,
+                text: e.innerText.trim(),
+                aria: e.getAttribute('aria-label'),
+                title: e.getAttribute('title')
+            }))"""
+        )
+
+        message = "📝 TEXTAREA:\n"
+
+        for item in textarea_info:
+            message += (
+                f"\n#{item['index']} "
+                f"placeholder={item['placeholder']} "
+                f"aria={item['aria']}"
+            )
+
+        message += "\n\n🔘 BUTTONS:\n"
+
+        for item in button_info:
+            message += (
+                f"\n#{item['index']} "
+                f"text={item['text']} "
+                f"aria={item['aria']} "
+                f"title={item['title']}"
+            )
+
+        await update.message.reply_text(message[:4000])
 
         await browser.close()
 
@@ -62,6 +87,7 @@ def main():
     )
 
     print("Bot is running...")
+
     app.run_polling()
 
 

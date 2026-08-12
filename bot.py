@@ -16,7 +16,7 @@ VOICE_URL = "https://voicelime.com/voice-generator"
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام علی 👋\n\n"
-        "یک جمله انگلیسی بفرست تا Voiceهای VoiceLime را پیدا کنم 🎙️"
+        "یک جمله انگلیسی بفرست تا Voiceهای انگلیسی را پیدا کنم 🎙️"
     )
 
 
@@ -32,7 +32,7 @@ async def generate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     await update.message.reply_text(
-        "🔎 در حال شناسایی Voiceهای واقعی VoiceLime..."
+        "🇺🇸 در حال بررسی Voiceهای English (United States)..."
     )
 
     try:
@@ -41,7 +41,9 @@ async def generate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
             browser = await p.chromium.launch(headless=True)
 
-            page = await browser.new_page()
+            page = await browser.new_page(
+                accept_downloads=True
+            )
 
             await page.goto(
                 VOICE_URL,
@@ -49,65 +51,107 @@ async def generate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 timeout=60000
             )
 
-            # Cookie
+            # قبول کوکی‌ها
             accept = page.get_by_role(
                 "button",
                 name="Accept All"
             )
 
             if await accept.count() > 0:
-
                 try:
                     await accept.click(timeout=3000)
                 except Exception:
                     pass
 
-            # صبر برای اجرای JavaScript
-            await page.wait_for_timeout(3000)
+            await page.wait_for_timeout(2000)
 
-            # همه عناصر قابل انتخاب
-            elements = await page.locator(
-                "select, option, [role='option'], "
-                "[role='combobox'], input"
-            ).evaluate_all(
-                """
-                els => els.map((e, i) => ({
-                    index: i,
-                    tag: e.tagName,
-                    text: (e.innerText || e.textContent || '').trim(),
-                    value: e.value || '',
-                    placeholder: e.placeholder || '',
-                    aria: e.getAttribute('aria-label') || '',
-                    role: e.getAttribute('role') || '',
-                    name: e.getAttribute('name') || '',
-                    id: e.id || '',
-                    type: e.type || ''
-                }))
-                """
+            # انتخاب English United States
+            language = page.locator(
+                "#languageSelect"
             )
 
-            # ساخت گزارش
-            message = "🎙 عناصر پیدا شده:\n\n"
+            await language.select_option(
+                "en-US"
+            )
 
-            for item in elements:
+            # صبر برای تغییر Voiceها
+            await page.wait_for_timeout(2000)
 
-                message += (
-                    f"#{item['index']} "
-                    f"{item['tag']}\n"
-                    f"Text: {item['text'][:150]}\n"
-                    f"Value: {item['value']}\n"
-                    f"Placeholder: {item['placeholder']}\n"
-                    f"ARIA: {item['aria']}\n"
-                    f"Role: {item['role']}\n"
-                    f"Name: {item['name']}\n"
-                    f"ID: {item['id']}\n"
-                    f"Type: {item['type']}\n\n"
+            # پیدا کردن تمام select ها
+            selects = await page.locator(
+                "select"
+            ).count()
+
+            result = []
+
+            for i in range(selects):
+
+                select = page.locator(
+                    "select"
+                ).nth(i)
+
+                info = await select.evaluate(
+                    """e => ({
+                        id: e.id,
+                        name: e.name,
+                        value: e.value
+                    })"""
                 )
 
-            if len(message) > 3900:
-                message = message[:3900] + "\n..."
+                options = await select.locator(
+                    "option"
+                ).evaluate_all(
+                    """
+                    els => els.map(e => ({
+                        text: e.textContent.trim(),
+                        value: e.value
+                    }))
+                    """
+                )
 
-            await update.message.reply_text(message)
+                result.append(
+                    {
+                        "index": i,
+                        "info": info,
+                        "options": options
+                    }
+                )
+
+            message = "🎙 Voiceهای English (United States):\n\n"
+
+            found = False
+
+            for item in result:
+
+                options = item["options"]
+
+                if len(options) > 1:
+
+                    found = True
+
+                    message += (
+                        f"SELECT #{item['index']}\n"
+                        f"ID: {item['info']['id']}\n\n"
+                    )
+
+                    for option in options:
+
+                        message += (
+                            f"• {option['text']}\n"
+                            f"  value: {option['value']}\n\n"
+                        )
+
+            if not found:
+
+                message += (
+                    "⚠️ Voice بعد از انتخاب زبان "
+                    "به صورت SELECT پیدا نشد.\n\n"
+                    "باید روش دیگری برای شناسایی Voiceها استفاده کنیم."
+                )
+
+            await update.message.reply_text(
+                message[:4000]
+            )
 
             await browser.close()
 

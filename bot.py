@@ -1,6 +1,4 @@
 import os
-from pathlib import Path
-
 from playwright.async_api import async_playwright
 from telegram import Update
 from telegram.ext import (
@@ -12,122 +10,112 @@ from telegram.ext import (
 )
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
 VOICE_URL = "https://voicelime.com/voice-generator"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام علی 👋\n\n"
-        "متن انگلیسی خودت را بفرست تا برایت صوتی کنم 🎧"
+        "یک جمله انگلیسی بفرست تا Voiceهای VoiceLime را پیدا کنم 🎙️"
     )
 
 
-async def generate_voice(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
+async def generate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+
     text = update.message.text.strip()
 
     if len(text) > 5000:
         await update.message.reply_text(
             f"⚠️ متن شما {len(text)} کاراکتر است.\n\n"
-            "VoiceLime حداکثر ۵۰۰۰ کاراکتر قبول می‌کند.\n"
-            "لطفاً متن را کوتاه‌تر کن."
+            "حداکثر ۵۰۰۰ کاراکتر مجاز است."
         )
         return
 
     await update.message.reply_text(
-        "🔎 در حال بررسی Voiceهای VoiceLime..."
+        "🔎 در حال شناسایی Voiceهای واقعی VoiceLime..."
     )
 
     try:
+
         async with async_playwright() as p:
 
             browser = await p.chromium.launch(headless=True)
 
-            page = await browser.new_page(
-                accept_downloads=True
-            )
+            page = await browser.new_page()
 
             await page.goto(
                 VOICE_URL,
-                wait_until="domcontentloaded",
-                timeout=60000,
+                wait_until="networkidle",
+                timeout=60000
             )
 
-            # قبول کوکی‌ها در صورت وجود
-            accept_button = page.get_by_role(
+            # Cookie
+            accept = page.get_by_role(
                 "button",
                 name="Accept All"
             )
 
-            if await accept_button.count() > 0:
+            if await accept.count() > 0:
+
                 try:
-                    await accept_button.click(timeout=3000)
+                    await accept.click(timeout=3000)
                 except Exception:
                     pass
 
-            # پیدا کردن Select ها
-            selects = await page.locator("select").count()
+            # صبر برای اجرای JavaScript
+            await page.wait_for_timeout(3000)
 
-            voice_info = []
+            # همه عناصر قابل انتخاب
+            elements = await page.locator(
+                "select, option, [role='option'], "
+                "[role='combobox'], input"
+            ).evaluate_all(
+                """
+                els => els.map((e, i) => ({
+                    index: i,
+                    tag: e.tagName,
+                    text: (e.innerText || e.textContent || '').trim(),
+                    value: e.value || '',
+                    placeholder: e.placeholder || '',
+                    aria: e.getAttribute('aria-label') || '',
+                    role: e.getAttribute('role') || '',
+                    name: e.getAttribute('name') || '',
+                    id: e.id || '',
+                    type: e.type || ''
+                }))
+                """
+            )
 
-            for i in range(selects):
+            # ساخت گزارش
+            message = "🎙 عناصر پیدا شده:\n\n"
 
-                options = await (
-                    page.locator("select")
-                    .nth(i)
-                    .locator("option")
-                    .all()
+            for item in elements:
+
+                message += (
+                    f"#{item['index']} "
+                    f"{item['tag']}\n"
+                    f"Text: {item['text'][:150]}\n"
+                    f"Value: {item['value']}\n"
+                    f"Placeholder: {item['placeholder']}\n"
+                    f"ARIA: {item['aria']}\n"
+                    f"Role: {item['role']}\n"
+                    f"Name: {item['name']}\n"
+                    f"ID: {item['id']}\n"
+                    f"Type: {item['type']}\n\n"
                 )
 
-                values = []
+            if len(message) > 3900:
+                message = message[:3900] + "\n..."
 
-                for option in options:
-
-                    text_option = (
-                        await option.inner_text()
-                    ).strip()
-
-                    value_option = (
-                        await option.get_attribute("value")
-                    )
-
-                    values.append(
-                        f"{text_option} | value={value_option}"
-                    )
-
-                if values:
-                    voice_info.append(
-                        f"SELECT #{i}:\n"
-                        + "\n".join(values)
-                    )
-
-            if voice_info:
-
-                message = (
-                    "🎙 Voiceهای پیدا شده در VoiceLime:\n\n"
-                    + "\n\n".join(voice_info)
-                )
-
-                await update.message.reply_text(
-                    message[:4000]
-                )
-
-            else:
-
-                await update.message.reply_text(
-                    "⚠️ Voice به صورت SELECT پیدا نشد."
-                )
+            await update.message.reply_text(message)
 
             await browser.close()
 
     except Exception as e:
 
         await update.message.reply_text(
-            "❌ خطا هنگام بررسی Voiceها:\n\n"
-            f"{str(e)[:1000]}"
+            "❌ خطا:\n\n"
+            f"{str(e)[:1500]}"
         )
 
 

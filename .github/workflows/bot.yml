@@ -2,9 +2,10 @@ name: Telegram Voice Bot
 
 on:
   workflow_dispatch:
-  push:
-    branches:
-      - main
+
+concurrency:
+  group: telegram-voice-bot
+  cancel-in-progress: true
 
 jobs:
   run-bot:
@@ -21,6 +22,9 @@ jobs:
 
       - name: Install dependencies
         run: pip install -r requirements.txt
+
+      - name: Install Playwright browser
+        run: playwright install chromium
 
       - name: Run Telegram Bot
         env:

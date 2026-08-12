@@ -38,11 +38,8 @@ async def generate_voice(
         return
 
     await update.message.reply_text(
-        "⏳ متن دریافت شد.\n"
-        "در حال ساخت فایل صوتی... 🎙️"
+        "🔎 در حال بررسی Voiceهای VoiceLime..."
     )
-
-    audio_file = Path("/tmp/voice.mp3")
 
     try:
         async with async_playwright() as p:
@@ -71,63 +68,66 @@ async def generate_voice(
                 except Exception:
                     pass
 
-            # وارد کردن متن
-            textarea = page.locator(
-                "textarea[placeholder='Enter text up to 5000 characters...']"
-            )
+            # پیدا کردن Select ها
+            selects = await page.locator("select").count()
 
-            await textarea.fill(text)
+            voice_info = []
 
-            # ساخت صدا
-            await page.get_by_role(
-                "button",
-                name="Generate Voice"
-            ).click()
+            for i in range(selects):
 
-            # صبر برای تولید
-            await page.wait_for_timeout(5000)
+                options = await (
+                    page.locator("select")
+                    .nth(i)
+                    .locator("option")
+                    .all()
+                )
 
-            # دانلود MP3
-            download_button = page.get_by_role(
-                "button",
-                name="⬇ Download MP3"
-            )
+                values = []
 
-            await download_button.wait_for(
-                state="visible",
-                timeout=60000
-            )
+                for option in options:
 
-            async with page.expect_download(
-                timeout=60000
-            ) as download_info:
+                    text_option = (
+                        await option.inner_text()
+                    ).strip()
 
-                await download_button.click()
+                    value_option = (
+                        await option.get_attribute("value")
+                    )
 
-            download = await download_info.value
+                    values.append(
+                        f"{text_option} | value={value_option}"
+                    )
 
-            await download.save_as(str(audio_file))
+                if values:
+                    voice_info.append(
+                        f"SELECT #{i}:\n"
+                        + "\n".join(values)
+                    )
+
+            if voice_info:
+
+                message = (
+                    "🎙 Voiceهای پیدا شده در VoiceLime:\n\n"
+                    + "\n\n".join(voice_info)
+                )
+
+                await update.message.reply_text(
+                    message[:4000]
+                )
+
+            else:
+
+                await update.message.reply_text(
+                    "⚠️ Voice به صورت SELECT پیدا نشد."
+                )
 
             await browser.close()
-
-        # ارسال فایل صوتی به تلگرام
-        with open(audio_file, "rb") as audio:
-
-            await update.message.reply_audio(
-                audio=audio,
-                title="English Voice 🎧",
-                caption="🎙️ ساخته‌شده با VoiceLime"
-            )
-
-        # حذف فایل موقت
-        if audio_file.exists():
-            audio_file.unlink()
 
     except Exception as e:
 
         await update.message.reply_text(
-            "❌ هنگام ساخت فایل صوتی مشکلی پیش آمد.\n\n"
-            f"جزئیات: {str(e)[:1000]}"
+            "❌ خطا هنگام بررسی Voiceها:\n\n"
+            f"{str(e)[:1000]}"
         )
 
 

@@ -1,89 +1,149 @@
 import os
+from pathlib import Path
+
 from playwright.async_api import async_playwright
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+from telegram.ext import (
+    Application,
+    CommandHandler,
+    MessageHandler,
+    ContextTypes,
+    filters,
+)
 
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+VOICE_URL = "https://voicelime.com/voice-generator"
 
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(
         "سلام علی 👋\n\n"
-        "یک جمله انگلیسی بفرست."
+        "متن انگلیسی خودت را بفرست تا برایت صوتی کنم 🎧"
     )
 
 
-async def generate_voice(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+async def generate_voice(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+    text = update.message.text.strip()
 
     if len(text) > 5000:
         await update.message.reply_text(
-            f"⚠️ متن شما {len(text)} کاراکتر است.\n"
+            f"⚠️ متن شما {len(text)} کاراکتر است.\n\n"
+            "VoiceLime حداکثر ۵۰۰۰ کاراکتر قبول می‌کند.\n"
             "لطفاً متن را کوتاه‌تر کن."
         )
         return
 
-    await update.message.reply_text("🔎 در حال بررسی کنترل‌های VoiceLime...")
+    await update.message.reply_text(
+        "⏳ متن دریافت شد.\n"
+        "در حال ساخت فایل صوتی... 🎙️"
+    )
 
-    async with async_playwright() as p:
-        browser = await p.chromium.launch(headless=True)
+    audio_file = Path("/tmp/voice.mp3")
 
-        page = await browser.new_page()
+    try:
+        async with async_playwright() as p:
 
-        await page.goto(
-            "https://voicelime.com/voice-generator",
-            wait_until="domcontentloaded",
-            timeout=60000
-        )
+            browser = await p.chromium.launch(headless=True)
 
-        textarea_info = await page.locator("textarea").evaluate_all(
-            """els => els.map((e, i) => ({
-                index: i,
-                placeholder: e.placeholder,
-                aria: e.getAttribute('aria-label')
-            }))"""
-        )
-
-        button_info = await page.locator("button").evaluate_all(
-            """els => els.map((e, i) => ({
-                index: i,
-                text: e.innerText.trim(),
-                aria: e.getAttribute('aria-label'),
-                title: e.getAttribute('title')
-            }))"""
-        )
-
-        message = "📝 TEXTAREA:\n"
-
-        for item in textarea_info:
-            message += (
-                f"\n#{item['index']} "
-                f"placeholder={item['placeholder']} "
-                f"aria={item['aria']}"
+            page = await browser.new_page(
+                accept_downloads=True
             )
 
-        message += "\n\n🔘 BUTTONS:\n"
-
-        for item in button_info:
-            message += (
-                f"\n#{item['index']} "
-                f"text={item['text']} "
-                f"aria={item['aria']} "
-                f"title={item['title']}"
+            await page.goto(
+                VOICE_URL,
+                wait_until="domcontentloaded",
+                timeout=60000,
             )
 
-        await update.message.reply_text(message[:4000])
+            # قبول کوکی‌ها در صورت وجود
+            accept_button = page.get_by_role(
+                "button",
+                name="Accept All"
+            )
 
-        await browser.close()
+            if await accept_button.count() > 0:
+                try:
+                    await accept_button.click(timeout=3000)
+                except Exception:
+                    pass
+
+            # وارد کردن متن
+            textarea = page.locator(
+                "textarea[placeholder='Enter text up to 5000 characters...']"
+            )
+
+            await textarea.fill(text)
+
+            # ساخت صدا
+            await page.get_by_role(
+                "button",
+                name="Generate Voice"
+            ).click()
+
+            # صبر برای تولید
+            await page.wait_for_timeout(5000)
+
+            # دانلود MP3
+            download_button = page.get_by_role(
+                "button",
+                name="⬇ Download MP3"
+            )
+
+            await download_button.wait_for(
+                state="visible",
+                timeout=60000
+            )
+
+            async with page.expect_download(
+                timeout=60000
+            ) as download_info:
+
+                await download_button.click()
+
+            download = await download_info.value
+
+            await download.save_as(str(audio_file))
+
+            await browser.close()
+
+        # ارسال فایل صوتی به تلگرام
+        with open(audio_file, "rb") as audio:
+
+            await update.message.reply_audio(
+                audio=audio,
+                title="English Voice 🎧",
+                caption="🎙️ ساخته‌شده با VoiceLime"
+            )
+
+        # حذف فایل موقت
+        if audio_file.exists():
+            audio_file.unlink()
+
+    except Exception as e:
+
+        await update.message.reply_text(
+            "❌ هنگام ساخت فایل صوتی مشکلی پیش آمد.\n\n"
+            f"جزئیات: {str(e)[:1000]}"
+        )
 
 
 def main():
+
     app = Application.builder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(
+        CommandHandler("start", start)
+    )
 
     app.add_handler(
-        MessageHandler(filters.TEXT & ~filters.COMMAND, generate_voice)
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            generate_voice
+        )
     )
 
     print("Bot is running...")

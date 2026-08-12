@@ -1,30 +1,31 @@
-import os
-from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, ContextTypes, filters
+name: Telegram Voice Bot
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "سلام علی 👋\n\n"
-        "متن انگلیسی خودت را برای من بفرست."
-    )
+jobs:
+  run-bot:
+    runs-on: ubuntu-latest
 
-async def receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    text = update.message.text
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
 
-    await update.message.reply_text(
-        f"✅ متن دریافت شد:\n\n{text}"
-    )
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
 
-def main():
-    app = Application.builder().token(TOKEN).build()
+      - name: Install dependencies
+        run: pip install -r requirements.txt
 
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_text))
+      - name: Install Playwright browser
+        run: playwright install chromium
 
-    print("Bot is running...")
-    app.run_polling()
-
-if __name__ == "__main__":
-    main()
+      - name: Run Telegram Bot
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+        run: python bot.py

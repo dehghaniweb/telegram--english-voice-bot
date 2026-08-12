@@ -1,99 +1,84 @@
-import os
-import logging
-
-from telegram import Update
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    MessageHandler,
-    ContextTypes,
-    filters,
-)
-
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-logging.basicConfig(
-    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    level=logging.INFO,
-)
-
-logger = logging.getLogger(__name__)
+import asyncio
+from playwright.async_api import async_playwright
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def main():
 
-    logger.info("START command received")
+    async with async_playwright() as p:
 
-    await update.message.reply_text(
-        "🇮🇷 سلام علی 👋\n\n"
-        "✅ ربات فارسی فعال است.\n\n"
-        "یک متن فارسی بفرست."
-    )
-
-
-async def message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-
-    text = update.message.text
-
-    logger.info("Message received: %s", text)
-
-    await update.message.reply_text(
-        "✅ پیام دریافت شد!\n\n"
-        f"متن شما:\n{text}"
-    )
-
-
-async def error_handler(update, context):
-
-    logger.error(
-        "Exception while handling update:",
-        exc_info=context.error
-    )
-
-
-def main():
-
-    if not TOKEN:
-        raise RuntimeError(
-            "TELEGRAM_BOT_TOKEN is missing!"
+        browser = await p.chromium.launch(
+            headless=True
         )
 
-    logger.info("================================")
-    logger.info("🇮🇷 PERSIAN VOICE BOT STARTED")
-    logger.info("================================")
+        page = await browser.new_page()
 
-    app = (
-        Application.builder()
-        .token(TOKEN)
-        .build()
-    )
+        print("🌐 Opening TTSMaker...")
 
-    app.add_handler(
-        CommandHandler(
-            "start",
-            start
+        await page.goto(
+            "https://ttsmaker.com/fa",
+            wait_until="domcontentloaded",
+            timeout=60000
         )
-    )
 
-    app.add_handler(
-        MessageHandler(
-            filters.TEXT & ~filters.COMMAND,
-            message
-        )
-    )
+        await page.wait_for_timeout(5000)
 
-    app.add_error_handler(
-        error_handler
-    )
+        print("✅ TTSMaker opened.")
 
-    logger.info(
-        "🤖 Waiting for Telegram messages..."
-    )
+        # پیدا کردن SELECT ها
+        selects = await page.locator("select").all()
 
-    app.run_polling(
-        drop_pending_updates=True
-    )
+        print(f"\n🎙 تعداد SELECT ها: {len(selects)}")
+
+        for i, select in enumerate(selects):
+
+            try:
+                element_id = await select.get_attribute("id")
+                value = await select.input_value()
+
+                print("\n━━━━━━━━━━━━━━━━━━━━")
+                print(f"SELECT #{i}")
+                print(f"ID: {element_id}")
+                print(f"Value: {value}")
+
+                options = await select.locator("option").all()
+
+                print(f"Options: {len(options)}")
+
+                for option in options:
+
+                    text = (await option.inner_text()).strip()
+                    value = await option.get_attribute("value")
+
+                    if text:
+                        print(
+                            f"• {text} | value={value}"
+                        )
+
+            except Exception as e:
+
+                print(
+                    f"⚠️ Error reading SELECT #{i}: {e}"
+                )
+
+        # بررسی متن صفحه برای فارسی
+        body_text = await page.locator("body").inner_text()
+
+        print("\n━━━━━━━━━━━━━━━━━━━━")
+        print("🔎 بررسی Persian / فارسی")
+        print("━━━━━━━━━━━━━━━━━━━━")
+
+        if "Persian" in body_text or "فارسی" in body_text:
+
+            print("✅ Persian language detected.")
+
+        else:
+
+            print("❌ Persian language not detected.")
+
+        await browser.close()
+
+        print("\n🏁 Scan finished.")
 
 
 if __name__ == "__main__":
-    main()
+    asyncio.run(main())

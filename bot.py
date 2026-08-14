@@ -2,11 +2,7 @@ import os
 import time
 from pathlib import Path
 
-from telegram import (
-    Update,
-    InlineKeyboardButton,
-    InlineKeyboardMarkup,
-)
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     Application,
     CommandHandler,
@@ -19,128 +15,86 @@ from telegram.ext import (
 from playwright.async_api import async_playwright
 
 
-# =========================================================
-# SETTINGS
-# =========================================================
-
-TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-VOICE_LIME_URL = "https://voicelime.com/voice-generator"
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+URL = "https://voicelime.com/voice-generator"
 
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
 
-# =========================================================
-# DEFAULT SETTINGS
-# =========================================================
+async def open_browser():
+    playwright = await async_playwright().start()
 
-DEFAULT_SPEED = 0
+    browser = await playwright.chromium.launch(
+        headless=True,
+        args=[
+            "--no-sandbox",
+            "--disable-setuid-sandbox",
+            "--disable-dev-shm-usage",
+        ],
+    )
 
-# VoiceLime speed:
-# -10 = slightly slower
-#   0 = normal
-# +10 = slightly faster
+    page = await browser.new_page(
+        accept_downloads=True
+    )
 
+    return playwright, browser, page
 
-# =========================================================
-# GET VOICES FROM VOICELIME
-# =========================================================
 
 async def get_voices():
 
-    async with async_playwright() as p:
+    playwright, browser, page = await open_browser()
 
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-            ],
+    try:
+
+        await page.goto(
+            URL,
+            wait_until="domcontentloaded",
+            timeout=60000,
         )
 
-        page = await browser.new_page()
+        await page.wait_for_timeout(3000)
 
-        try:
+        selects = page.locator("select")
+        count = await selects.count()
 
-            print("Loading VoiceLime...")
+        print("Select count:", count)
 
-            await page.goto(
-                VOICE_LIME_URL,
-                wait_until="domcontentloaded",
-                timeout=60000,
+        if count < 2:
+            raise Exception(
+                "Voice selector was not found."
             )
 
-            await page.wait_for_timeout(3000)
+        voice_select = selects.nth(1)
+        options = voice_select.locator("option")
 
-            # Try to disable ad blocker warning if present
-            try:
+        number = await options.count()
 
-                disable_button = page.get_by_role(
-                    "button",
-                    name="Disable Ad Blocker & Reload"
-                )
+        voices = []
 
-                if await disable_button.is_visible():
+        for i in range(number):
 
-                    print("Ad blocker message detected.")
+            option = options.nth(i)
 
-                    await disable_button.click()
+            value = await option.get_attribute("value")
+            name = (await option.inner_text()).strip()
 
-                    await page.wait_for_timeout(5000)
+            if value and name:
 
-            except Exception:
-                pass
+                voices.append({
+                    "value": value,
+                    "name": name,
+                })
 
-            selects = page.locator("select")
+        print("Voices found:", len(voices))
 
-            count = await selects.count()
+        return voices
 
-            print("Select count:", count)
+    finally:
 
-            if count < 2:
-                raise Exception(
-                    "VoiceLime voice selector was not found."
-                )
+        await browser.close()
+        await playwright.stop()
 
-            voice_select = selects.nth(1)
-
-            options = voice_select.locator("option")
-
-            option_count = await options.count()
-
-            voices = []
-
-            for i in range(option_count):
-
-                option = options.nth(i)
-
-                value = await option.get_attribute("value")
-
-                name = (await option.inner_text()).strip()
-
-                if value and name:
-
-                    voices.append({
-                        "value": value,
-                        "name": name,
-                    })
-
-            print(
-                f"Found {len(voices)} voices."
-            )
-
-            return voices
-
-        finally:
-
-            await browser.close()
-
-
-# =========================================================
-# GENERATE VOICE
-# =========================================================
 
 async def generate_voice(
     text,
@@ -148,249 +102,189 @@ async def generate_voice(
     speed_value
 ):
 
-    output_file = (
+    filename = (
         DOWNLOAD_DIR /
         f"voice_{int(time.time())}.mp3"
     )
 
-    async with async_playwright() as p:
+    playwright, browser, page = await open_browser()
 
-        browser = await p.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-setuid-sandbox",
-                "--disable-dev-shm-usage",
-            ],
+    try:
+
+        print("Opening VoiceLime...")
+
+        await page.goto(
+            URL,
+            wait_until="domcontentloaded",
+            timeout=60000,
         )
 
-        page = await browser.new_page(
-            accept_downloads=True
+        await page.wait_for_timeout(3000)
+
+        print("Page loaded.")
+
+        # -----------------------------
+        # TEXT
+        # -----------------------------
+
+        textarea = page.locator("textarea").first
+
+        await textarea.wait_for(
+            state="visible",
+            timeout=30000
         )
+
+        await textarea.fill(text)
+
+        print("Text entered.")
+
+        # -----------------------------
+        # SELECTS
+        # -----------------------------
+
+        selects = page.locator("select")
+        count = await selects.count()
+
+        print("Select count:", count)
+
+        if count < 2:
+            raise Exception(
+                "Voice selector not found."
+            )
+
+        # Language
+        language = selects.nth(0)
 
         try:
-
-            print("Opening VoiceLime...")
-
-            await page.goto(
-                VOICE_LIME_URL,
-                wait_until="domcontentloaded",
-                timeout=60000,
+            await language.select_option(
+                label="English"
             )
+        except Exception:
+            pass
 
-            await page.wait_for_timeout(3000)
+        # Voice
+        voice = selects.nth(1)
 
-            # =================================================
-            # AD BLOCKER
-            # =================================================
+        await voice.select_option(
+            value=voice_value
+        )
 
-            try:
+        print(
+            "Voice selected:",
+            voice_value
+        )
 
-                disable_button = page.get_by_role(
-                    "button",
-                    name="Disable Ad Blocker & Reload"
-                )
+        # -----------------------------
+        # SPEED
+        # -----------------------------
 
-                if await disable_button.is_visible():
+        ranges = page.locator(
+            'input[type="range"]'
+        )
 
-                    print(
-                        "Ad blocker warning found."
-                    )
+        range_count = await ranges.count()
 
-                    await disable_button.click()
+        print(
+            "Range inputs:",
+            range_count
+        )
 
-                    await page.wait_for_timeout(5000)
+        if range_count >= 2:
 
-            except Exception:
-                pass
+            speed = ranges.nth(1)
 
-            # =================================================
-            # TEXT
-            # =================================================
-
-            text_area = page.locator(
-                "textarea"
-            ).first
-
-            await text_area.wait_for(
-                state="visible",
-                timeout=30000
-            )
-
-            await text_area.fill(text)
-
-            print("Text entered.")
-
-            # =================================================
-            # LANGUAGE
-            # =================================================
-
-            selects = page.locator("select")
-
-            select_count = await selects.count()
-
-            if select_count < 2:
-
-                raise Exception(
-                    "Voice selector not found."
-                )
-
-            language_select = selects.nth(0)
-
-            try:
-
-                await language_select.select_option(
-                    label="English"
-                )
-
-            except Exception:
-
-                try:
-
-                    await language_select.select_option(
-                        value="en"
-                    )
-
-                except Exception:
-
-                    print(
-                        "Could not explicitly select English."
-                    )
-
-            # =================================================
-            # VOICE
-            # =================================================
-
-            voice_select = selects.nth(1)
-
-            await voice_select.select_option(
-                value=voice_value
+            await speed.evaluate(
+                """
+                (element, value) => {
+                    element.value = value;
+                    element.dispatchEvent(
+                        new Event(
+                            'input',
+                            {bubbles: true}
+                        )
+                    );
+                    element.dispatchEvent(
+                        new Event(
+                            'change',
+                            {bubbles: true}
+                        )
+                    );
+                }
+                """,
+                str(speed_value)
             )
 
             print(
-                "Voice selected:",
-                voice_value
+                "Speed:",
+                speed_value
             )
 
-            # =================================================
-            # SPEED
-            # =================================================
+        # -----------------------------
+        # GENERATE
+        # -----------------------------
 
-            # VoiceLime has Pitch, Speed and Volume inputs.
-            # We assume the three range inputs are:
-            #
-            # 0 = Pitch
-            # 1 = Speed
-            # 2 = Volume
+        generate = page.get_by_role(
+            "button",
+            name="Generate Voice"
+        )
 
-            range_inputs = page.locator(
-                'input[type="range"]'
-            )
+        await generate.wait_for(
+            state="visible",
+            timeout=30000
+        )
 
-            range_count = await range_inputs.count()
+        print("Generating...")
 
-            print(
-                "Range inputs:",
-                range_count
-            )
+        await generate.click()
 
-            if range_count >= 2:
+        # -----------------------------
+        # WAIT
+        # -----------------------------
 
-                speed_input = range_inputs.nth(1)
+        await page.wait_for_timeout(8000)
 
-                await speed_input.evaluate(
-                    """(el, value) => {
-                        el.value = value;
-                        el.dispatchEvent(
-                            new Event('input', {bubbles: true})
-                        );
-                        el.dispatchEvent(
-                            new Event('change', {bubbles: true})
-                        );
-                    }""",
-                    str(speed_value)
-                )
+        # -----------------------------
+        # DOWNLOAD
+        # -----------------------------
 
-                print(
-                    "Speed set:",
-                    speed_value
-                )
+        download_button = page.get_by_role(
+            "button",
+            name="Download MP3"
+        )
 
-            # =================================================
-            # GENERATE
-            # =================================================
+        await download_button.wait_for(
+            state="visible",
+            timeout=60000
+        )
 
-            generate_button = page.get_by_role(
-                "button",
-                name="Generate Voice"
-            )
+        print(
+            "Download button found."
+        )
 
-            await generate_button.wait_for(
-                state="visible",
-                timeout=30000
-            )
+        async with page.expect_download(
+            timeout=60000
+        ) as info:
 
-            print(
-                "Generating voice..."
-            )
+            await download_button.click()
 
-            await generate_button.click()
+        download = await info.value
 
-            # =================================================
-            # WAIT
-            # =================================================
+        await download.save_as(
+            str(filename)
+        )
 
-            print(
-                "Waiting for audio..."
-            )
+        print(
+            "Saved:",
+            filename
+        )
 
-            await page.wait_for_timeout(5000)
+        return filename
 
-            # =================================================
-            # DOWNLOAD
-            # =================================================
+    finally:
 
-            download_button = page.get_by_role(
-                "button",
-                name="Download MP3"
-            )
+        await browser.close()
+        await playwright.stop()
 
-            await download_button.wait_for(
-                state="visible",
-                timeout=60000
-            )
-
-            print(
-                "Download button found."
-            )
-
-            async with page.expect_download(
-                timeout=60000
-            ) as download_info:
-
-                await download_button.click()
-
-            download = await download_info.value
-
-            await download.save_as(
-                str(output_file)
-            )
-
-            print(
-                "MP3 saved:",
-                output_file
-            )
-
-            return output_file
-
-        finally:
-
-            await browser.close()
-
-
-# =========================================================
-# START COMMAND
-# =========================================================
 
 async def start(
     update: Update,
@@ -398,8 +292,8 @@ async def start(
 ):
 
     await update.message.reply_text(
-        "🎙 English Voice Bot\n\n"
-        "در حال دریافت لیست صداها..."
+        "🎙 VoiceLime\n\n"
+        "در حال دریافت صداها..."
     )
 
     try:
@@ -408,19 +302,18 @@ async def start(
 
         context.user_data["voices"] = voices
 
-        # Show first 12 voices
         buttons = []
 
         for i, voice in enumerate(
-            voices[:12]
+            voices[:15]
         ):
 
-            buttons.append([
-                InlineKeyboardButton(
-                    voice["name"],
-                    callback_data=f"voice:{i}"
-                )
-            ])
+            button = InlineKeyboardButton(
+                voice["name"],
+                callback_data=f"voice_{i}"
+            )
+
+            buttons.append([button])
 
         if not buttons:
 
@@ -438,21 +331,17 @@ async def start(
     except Exception as e:
 
         print(
-            "VOICE LIST ERROR:",
+            "VOICE ERROR:",
             repr(e)
         )
 
         await update.message.reply_text(
-            "❌ نتوانستم لیست صداهای VoiceLime را بگیرم.\n\n"
-            f"{str(e)}"
+            "❌ دریافت Voiceها ناموفق بود.\n\n"
+            + str(e)
         )
 
 
-# =========================================================
-# CALLBACKS
-# =========================================================
-
-async def callback_handler(
+async def button_handler(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
@@ -463,14 +352,14 @@ async def callback_handler(
 
     data = query.data
 
-    # =====================================================
+    # -----------------------------
     # VOICE
-    # =====================================================
+    # -----------------------------
 
-    if data.startswith("voice:"):
+    if data.startswith("voice_"):
 
         index = int(
-            data.split(":")[1]
+            data.split("_")[1]
         )
 
         voices = context.user_data.get(
@@ -481,30 +370,199 @@ async def callback_handler(
         if index >= len(voices):
 
             await query.edit_message_text(
-                "❌ این Voice پیدا نشد."
+                "❌ Voice پیدا نشد."
             )
 
             return
 
-        voice = voices[index]
+        selected = voices[index]
 
-        context.user_data["voice"] = voice
+        context.user_data["voice"] = selected
 
-        speed_buttons = [
-
+        buttons = [
             [
                 InlineKeyboardButton(
                     "🐢 کمی کم",
-                    callback_data="speed:-10"
+                    callback_data="speed_-10"
                 )
             ],
-
             [
                 InlineKeyboardButton(
                     "🎙 متوسط",
-                    callback_data="speed:0"
+                    callback_data="speed_0"
                 )
             ],
-
             [
                 InlineKeyboardButton(
+                    "⚡ کمی زیاد",
+                    callback_data="speed_10"
+                )
+            ],
+        ]
+
+        await query.edit_message_text(
+            "🎤 Voice:\n"
+            + selected["name"]
+            + "\n\n"
+            "⚡ سرعت را انتخاب کن:",
+            reply_markup=InlineKeyboardMarkup(
+                buttons
+            )
+        )
+
+        return
+
+    # -----------------------------
+    # SPEED
+    # -----------------------------
+
+    if data.startswith("speed_"):
+
+        speed = int(
+            data.split("_")[1]
+        )
+
+        context.user_data["speed"] = speed
+
+        voice = context.user_data.get(
+            "voice"
+        )
+
+        if not voice:
+
+            await query.edit_message_text(
+                "❌ ابتدا Voice را انتخاب کن."
+            )
+
+            return
+
+        names = {
+            -10: "🐢 کمی کم",
+            0: "🎙 متوسط",
+            10: "⚡ کمی زیاد",
+        }
+
+        speed_name = names.get(
+            speed,
+            "🎙 متوسط"
+        )
+
+        await query.edit_message_text(
+            "✅ تنظیمات آماده است.\n\n"
+            "🎤 Voice: "
+            + voice["name"]
+            + "\n"
+            "⚡ Speed: "
+            + speed_name
+            + "\n\n"
+            "حالا متن انگلیسی را بفرست."
+        )
+
+
+async def text_handler(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    text = update.message.text.strip()
+
+    voice = context.user_data.get(
+        "voice"
+    )
+
+    speed = context.user_data.get(
+        "speed",
+        0
+    )
+
+    if not voice:
+
+        await update.message.reply_text(
+            "ابتدا /start را بزن."
+        )
+
+        return
+
+    await update.message.reply_text(
+        "🎙 در حال ساخت فایل صوتی..."
+    )
+
+    try:
+
+        file = await generate_voice(
+            text,
+            voice["value"],
+            speed
+        )
+
+        with open(
+            file,
+            "rb"
+        ) as audio:
+
+            await update.message.reply_audio(
+                audio=audio,
+                filename="english_voice.mp3"
+            )
+
+        file.unlink(
+            missing_ok=True
+        )
+
+    except Exception as e:
+
+        print(
+            "GENERATION ERROR:",
+            repr(e)
+        )
+
+        await update.message.reply_text(
+            "❌ Voice generation failed.\n\n"
+            + str(e)
+        )
+
+
+def main():
+
+    if not TOKEN:
+
+        raise RuntimeError(
+            "TELEGRAM_BOT_TOKEN is missing."
+        )
+
+    app = (
+        Application
+        .builder()
+        .token(TOKEN)
+        .build()
+    )
+
+    app.add_handler(
+        CommandHandler(
+            "start",
+            start
+        )
+    )
+
+    app.add_handler(
+        CallbackQueryHandler(
+            button_handler
+        )
+    )
+
+    app.add_handler(
+        MessageHandler(
+            filters.TEXT & ~filters.COMMAND,
+            text_handler
+        )
+    )
+
+    print(
+        "BOT IS RUNNING..."
+    )
+
+    app.run_polling()
+
+
+if __name__ == "__main__":
+    main()

@@ -1,102 +1,199 @@
 import os
+import time
 from pathlib import Path
 
-from playwright.async_api import async_playwright
 from telegram import Update
 from telegram.ext import (
     Application,
-    CommandHandler,
     MessageHandler,
     ContextTypes,
     filters,
 )
 
-TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-
-VOICE_URL = "https://voicelime.com/voice-generator"
+from playwright.async_api import async_playwright
 
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "سلام علی 👋\n\n"
-        "متن انگلیسی خودت را بفرست تا برایت صوتی کنم 🎧"
-    )
+# =========================================================
+# SETTINGS
+# =========================================================
+
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+VOICE_LIME_URL = "https://voicelime.com/voice-generator"
+
+DOWNLOAD_DIR = Path("downloads")
+DOWNLOAD_DIR.mkdir(exist_ok=True)
 
 
-async def generate_voice(
-    update: Update,
-    context: ContextTypes.DEFAULT_TYPE
-):
-    text = update.message.text.strip()
+# =========================================================
+# VOICELIME
+# =========================================================
 
-    if len(text) > 5000:
-        await update.message.reply_text(
-            f"⚠️ متن شما {len(text)} کاراکتر است.\n\n"
-            "VoiceLime حداکثر ۵۰۰۰ کاراکتر قبول می‌کند.\n"
-            "لطفاً متن را کوتاه‌تر کن."
+async def generate_voice(text: str) -> Path:
+
+    output_file = DOWNLOAD_DIR / f"voice_{int(time.time())}.mp3"
+
+    async with async_playwright() as p:
+
+        browser = await p.chromium.launch(
+            headless=True,
+            args=[
+                "--no-sandbox",
+                "--disable-setuid-sandbox",
+                "--disable-dev-shm-usage",
+            ],
         )
-        return
 
-    await update.message.reply_text(
-        "⏳ متن دریافت شد.\n"
-        "در حال ساخت فایل صوتی... 🎙️"
-    )
+        page = await browser.new_page(
+            accept_downloads=True
+        )
 
-    audio_file = Path("/tmp/voice.mp3")
+        try:
 
-    try:
-        async with async_playwright() as p:
-
-            browser = await p.chromium.launch(headless=True)
-
-            page = await browser.new_page(
-                accept_downloads=True
-            )
+            print("Opening VoiceLime...")
 
             await page.goto(
-                VOICE_URL,
+                VOICE_LIME_URL,
                 wait_until="domcontentloaded",
                 timeout=60000,
             )
 
-            # قبول کوکی‌ها در صورت وجود
-            accept_button = page.get_by_role(
-                "button",
-                name="Accept All"
+            await page.wait_for_timeout(3000)
+
+            # Check page
+            page_text = await page.locator("body").inner_text()
+
+            if "Ad Blocker Detected" in page_text:
+                raise Exception(
+                    "VoiceLime detected an ad blocker."
+                )
+
+            # =================================================
+            # TEXT BOX
+            # =================================================
+
+            text_area = page.locator("textarea").first
+
+            await text_area.wait_for(
+                state="visible",
+                timeout=30000
             )
 
-            if await accept_button.count() > 0:
+            await text_area.fill(text)
+
+            print("Text entered.")
+
+            # =================================================
+            # SELECT LANGUAGE
+            # =================================================
+
+            selects = page.locator("select")
+
+            select_count = await selects.count()
+
+            print(
+                "Select elements:",
+                select_count
+            )
+
+            if select_count > 0:
+
                 try:
-                    await accept_button.click(timeout=3000)
+                    await selects.nth(0).select_option(
+                        label="English"
+                    )
+
                 except Exception:
-                    pass
 
-            # وارد کردن متن
-            textarea = page.locator(
-                "textarea[placeholder='Enter text up to 5000 characters...']"
-            )
+                    try:
+                        await selects.nth(0).select_option(
+                            value="en"
+                        )
 
-            await textarea.fill(text)
+                    except Exception:
+                        pass
 
-            # ساخت صدا
-            await page.get_by_role(
+            # =================================================
+            # SELECT VOICE
+            # =================================================
+
+            if select_count > 1:
+
+                try:
+
+                    options = await selects.nth(1).locator(
+                        "option"
+                    ).all()
+
+                    for option in options:
+
+                        value = await option.get_attribute(
+                            "value"
+                        )
+
+                        label = await option.inner_text()
+
+                        if value and value.strip():
+
+                            try:
+
+                                await selects.nth(1).select_option(
+                                    value=value
+                                )
+
+                                print(
+                                    "Selected voice:",
+                                    label
+                                )
+
+                                break
+
+                            except Exception:
+                                continue
+
+                except Exception as e:
+
+                    print(
+                        "Voice selection warning:",
+                        e
+                    )
+
+            # =================================================
+            # GENERATE VOICE
+            # =================================================
+
+            generate_button = page.get_by_role(
                 "button",
                 name="Generate Voice"
-            ).click()
+            )
 
-            # صبر برای تولید
+            await generate_button.wait_for(
+                state="visible",
+                timeout=30000
+            )
+
+            print("Generating voice...")
+
+            await generate_button.click()
+
+            # Wait for generation
             await page.wait_for_timeout(5000)
 
-            # دانلود MP3
+            # =================================================
+            # DOWNLOAD MP3
+            # =================================================
+
             download_button = page.get_by_role(
                 "button",
-                name="⬇ Download MP3"
+                name="Download MP3"
             )
 
             await download_button.wait_for(
                 state="visible",
                 timeout=60000
             )
+
+            print("Voice generated.")
 
             async with page.expect_download(
                 timeout=60000
@@ -106,50 +203,122 @@ async def generate_voice(
 
             download = await download_info.value
 
-            await download.save_as(str(audio_file))
+            await download.save_as(
+                str(output_file)
+            )
+
+            print(
+                "Downloaded:",
+                output_file
+            )
+
+            return output_file
+
+        finally:
 
             await browser.close()
 
-        # ارسال فایل صوتی به تلگرام
-        with open(audio_file, "rb") as audio:
+
+# =========================================================
+# TELEGRAM MESSAGE HANDLER
+# =========================================================
+
+async def handle_message(
+    update: Update,
+    context: ContextTypes.DEFAULT_TYPE
+):
+
+    if not update.message:
+        return
+
+    text = update.message.text
+
+    if not text:
+        return
+
+    text = text.strip()
+
+    if not text:
+        return
+
+    print(
+        "Received:",
+        text
+    )
+
+    await update.message.reply_text(
+        "🎙 Generating English voice..."
+    )
+
+    try:
+
+        audio_file = await generate_voice(text)
+
+        with open(
+            audio_file,
+            "rb"
+        ) as audio:
 
             await update.message.reply_audio(
                 audio=audio,
-                title="English Voice 🎧",
-                caption="🎙️ ساخته‌شده با VoiceLime"
+                filename="english_voice.mp3",
+                title="English Voice"
             )
 
-        # حذف فایل موقت
-        if audio_file.exists():
+        # Delete temporary MP3
+        try:
             audio_file.unlink()
+        except Exception:
+            pass
 
     except Exception as e:
 
+        print(
+            "ERROR:",
+            repr(e)
+        )
+
         await update.message.reply_text(
-            "❌ هنگام ساخت فایل صوتی مشکلی پیش آمد.\n\n"
-            f"جزئیات: {str(e)[:1000]}"
+            "❌ Voice generation failed.\n\n"
+            f"Error: {str(e)}"
         )
 
 
+# =========================================================
+# MAIN
+# =========================================================
+
 def main():
 
-    app = Application.builder().token(TOKEN).build()
+    if not TELEGRAM_BOT_TOKEN:
 
-    app.add_handler(
-        CommandHandler("start", start)
+        raise RuntimeError(
+            "TELEGRAM_BOT_TOKEN is not set."
+        )
+
+    app = (
+        Application
+        .builder()
+        .token(TELEGRAM_BOT_TOKEN)
+        .build()
     )
 
     app.add_handler(
         MessageHandler(
             filters.TEXT & ~filters.COMMAND,
-            generate_voice
+            handle_message
         )
     )
 
-    print("Bot is running...")
+    print(
+        "Telegram Voice Bot is running..."
+    )
 
     app.run_polling()
 
 
-if name == "main":
-    main()
+# =========================================================
+# START
+# =========================================================
+
+if __

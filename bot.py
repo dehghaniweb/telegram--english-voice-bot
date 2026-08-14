@@ -15,14 +15,46 @@ from telegram.ext import (
 from playwright.async_api import async_playwright
 
 
+# =========================================================
+# SETTINGS
+# =========================================================
+
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-URL = "https://voicelime.com/voice-generator"
+
+VOICE_LIME_URL = "https://voicelime.com/voice-generator"
 
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
+# GitHub Workflow runs for 4 minutes.
+# Bot stops slightly before that.
+MAX_RUNTIME = 210
+
+
+# =========================================================
+# GLOBAL START TIME
+# =========================================================
+
+START_TIME = time.time()
+
+
+# =========================================================
+# CHECK RUNTIME
+# =========================================================
+
+def time_is_over():
+
+    return (
+        time.time() - START_TIME
+    ) >= MAX_RUNTIME
+
+
+# =========================================================
+# OPEN BROWSER
+# =========================================================
 
 async def open_browser():
+
     playwright = await async_playwright().start()
 
     browser = await playwright.chromium.launch(
@@ -41,6 +73,10 @@ async def open_browser():
     return playwright, browser, page
 
 
+# =========================================================
+# GET VOICES
+# =========================================================
+
 async def get_voices():
 
     playwright, browser, page = await open_browser()
@@ -48,7 +84,7 @@ async def get_voices():
     try:
 
         await page.goto(
-            URL,
+            VOICE_LIME_URL,
             wait_until="domcontentloaded",
             timeout=60000,
         )
@@ -56,17 +92,25 @@ async def get_voices():
         await page.wait_for_timeout(3000)
 
         selects = page.locator("select")
+
         count = await selects.count()
 
-        print("Select count:", count)
+        print(
+            "Select count:",
+            count
+        )
 
         if count < 2:
+
             raise Exception(
                 "Voice selector was not found."
             )
 
         voice_select = selects.nth(1)
-        options = voice_select.locator("option")
+
+        options = voice_select.locator(
+            "option"
+        )
 
         number = await options.count()
 
@@ -76,8 +120,13 @@ async def get_voices():
 
             option = options.nth(i)
 
-            value = await option.get_attribute("value")
-            name = (await option.inner_text()).strip()
+            value = await option.get_attribute(
+                "value"
+            )
+
+            name = (
+                await option.inner_text()
+            ).strip()
 
             if value and name:
 
@@ -86,7 +135,10 @@ async def get_voices():
                     "name": name,
                 })
 
-        print("Voices found:", len(voices))
+        print(
+            "Voices found:",
+            len(voices)
+        )
 
         return voices
 
@@ -95,6 +147,10 @@ async def get_voices():
         await browser.close()
         await playwright.stop()
 
+
+# =========================================================
+# GENERATE VOICE
+# =========================================================
 
 async def generate_voice(
     text,
@@ -111,23 +167,25 @@ async def generate_voice(
 
     try:
 
-        print("Opening VoiceLime...")
+        print(
+            "Opening VoiceLime..."
+        )
 
         await page.goto(
-            URL,
+            VOICE_LIME_URL,
             wait_until="domcontentloaded",
             timeout=60000,
         )
 
         await page.wait_for_timeout(3000)
 
-        print("Page loaded.")
-
-        # -----------------------------
+        # -------------------------------------------------
         # TEXT
-        # -----------------------------
+        # -------------------------------------------------
 
-        textarea = page.locator("textarea").first
+        textarea = page.locator(
+            "textarea"
+        ).first
 
         await textarea.wait_for(
             state="visible",
@@ -136,33 +194,47 @@ async def generate_voice(
 
         await textarea.fill(text)
 
-        print("Text entered.")
+        print(
+            "Text entered."
+        )
 
-        # -----------------------------
+        # -------------------------------------------------
         # SELECTS
-        # -----------------------------
+        # -------------------------------------------------
 
-        selects = page.locator("select")
+        selects = page.locator(
+            "select"
+        )
+
         count = await selects.count()
 
-        print("Select count:", count)
+        print(
+            "Select count:",
+            count
+        )
 
         if count < 2:
+
             raise Exception(
                 "Voice selector not found."
             )
 
-        # Language
+        # LANGUAGE
+
         language = selects.nth(0)
 
         try:
+
             await language.select_option(
                 label="English"
             )
+
         except Exception:
+
             pass
 
-        # Voice
+        # VOICE
+
         voice = selects.nth(1)
 
         await voice.select_option(
@@ -174,9 +246,9 @@ async def generate_voice(
             voice_value
         )
 
-        # -----------------------------
+        # -------------------------------------------------
         # SPEED
-        # -----------------------------
+        # -------------------------------------------------
 
         ranges = page.locator(
             'input[type="range"]'
@@ -197,12 +269,14 @@ async def generate_voice(
                 """
                 (element, value) => {
                     element.value = value;
+
                     element.dispatchEvent(
                         new Event(
                             'input',
                             {bubbles: true}
                         )
                     );
+
                     element.dispatchEvent(
                         new Event(
                             'change',
@@ -219,9 +293,9 @@ async def generate_voice(
                 speed_value
             )
 
-        # -----------------------------
+        # -------------------------------------------------
         # GENERATE
-        # -----------------------------
+        # -------------------------------------------------
 
         generate = page.get_by_role(
             "button",
@@ -233,19 +307,23 @@ async def generate_voice(
             timeout=30000
         )
 
-        print("Generating...")
+        print(
+            "Generating..."
+        )
 
         await generate.click()
 
-        # -----------------------------
+        # -------------------------------------------------
         # WAIT
-        # -----------------------------
+        # -------------------------------------------------
 
-        await page.wait_for_timeout(8000)
+        await page.wait_for_timeout(
+            8000
+        )
 
-        # -----------------------------
+        # -------------------------------------------------
         # DOWNLOAD
-        # -----------------------------
+        # -------------------------------------------------
 
         download_button = page.get_by_role(
             "button",
@@ -286,10 +364,18 @@ async def generate_voice(
         await playwright.stop()
 
 
+# =========================================================
+# START
+# =========================================================
+
 async def start(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
+
+    if time_is_over():
+
+        return
 
     await update.message.reply_text(
         "🎙 VoiceLime\n\n"
@@ -300,7 +386,9 @@ async def start(
 
         voices = await get_voices()
 
-        context.user_data["voices"] = voices
+        context.user_data[
+            "voices"
+        ] = voices
 
         buttons = []
 
@@ -308,12 +396,14 @@ async def start(
             voices[:15]
         ):
 
-            button = InlineKeyboardButton(
-                voice["name"],
-                callback_data=f"voice_{i}"
+            buttons.append(
+                [
+                    InlineKeyboardButton(
+                        voice["name"],
+                        callback_data=f"voice_{i}"
+                    )
+                ]
             )
-
-            buttons.append([button])
 
         if not buttons:
 
@@ -341,6 +431,10 @@ async def start(
         )
 
 
+# =========================================================
+# BUTTON HANDLER
+# =========================================================
+
 async def button_handler(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
@@ -352,9 +446,9 @@ async def button_handler(
 
     data = query.data
 
-    # -----------------------------
+    # -----------------------------------------------------
     # VOICE
-    # -----------------------------
+    # -----------------------------------------------------
 
     if data.startswith("voice_"):
 
@@ -377,27 +471,33 @@ async def button_handler(
 
         selected = voices[index]
 
-        context.user_data["voice"] = selected
+        context.user_data[
+            "voice"
+        ] = selected
 
         buttons = [
+
             [
                 InlineKeyboardButton(
                     "🐢 کمی کم",
                     callback_data="speed_-10"
                 )
             ],
+
             [
                 InlineKeyboardButton(
                     "🎙 متوسط",
                     callback_data="speed_0"
                 )
             ],
+
             [
                 InlineKeyboardButton(
                     "⚡ کمی زیاد",
                     callback_data="speed_10"
                 )
             ],
+
         ]
 
         await query.edit_message_text(
@@ -412,9 +512,9 @@ async def button_handler(
 
         return
 
-    # -----------------------------
+    # -----------------------------------------------------
     # SPEED
-    # -----------------------------
+    # -----------------------------------------------------
 
     if data.startswith("speed_"):
 
@@ -422,7 +522,9 @@ async def button_handler(
             data.split("_")[1]
         )
 
-        context.user_data["speed"] = speed
+        context.user_data[
+            "speed"
+        ] = speed
 
         voice = context.user_data.get(
             "voice"
@@ -459,12 +561,24 @@ async def button_handler(
         )
 
 
+# =========================================================
+# TEXT HANDLER
+# =========================================================
+
 async def text_handler(
     update: Update,
     context: ContextTypes.DEFAULT_TYPE
 ):
 
+    if time_is_over():
+
+        return
+
     text = update.message.text.strip()
+
+    if not text:
+
+        return
 
     voice = context.user_data.get(
         "voice"
@@ -522,6 +636,38 @@ async def text_handler(
         )
 
 
+# =========================================================
+# AUTO STOP
+# =========================================================
+
+async def stop_bot(
+    application
+):
+
+    await application.stop()
+
+
+async def timer_task(
+    application
+):
+
+    await __import__(
+        "asyncio"
+    ).sleep(
+        MAX_RUNTIME
+    )
+
+    print(
+        "Maximum runtime reached."
+    )
+
+    await application.stop()
+
+
+# =========================================================
+# MAIN
+# =========================================================
+
 def main():
 
     if not TOKEN:
@@ -561,8 +707,14 @@ def main():
         "BOT IS RUNNING..."
     )
 
-    app.run_polling()
+    app.run_polling(
+        close_loop=False
+    )
 
+
+# =========================================================
+# RUN
+# =========================================================
 
 if __name__ == "__main__":
     main()

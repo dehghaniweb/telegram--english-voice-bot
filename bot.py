@@ -13,10 +13,6 @@ from telegram.ext import (
 from playwright.async_api import async_playwright
 
 
-# =========================================================
-# SETTINGS
-# =========================================================
-
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 VOICE_LIME_URL = "https://voicelime.com/voice-generator"
@@ -24,10 +20,6 @@ VOICE_LIME_URL = "https://voicelime.com/voice-generator"
 DOWNLOAD_DIR = Path("downloads")
 DOWNLOAD_DIR.mkdir(exist_ok=True)
 
-
-# =========================================================
-# VOICELIME
-# =========================================================
 
 async def generate_voice(text: str) -> Path:
 
@@ -60,17 +52,7 @@ async def generate_voice(text: str) -> Path:
 
             await page.wait_for_timeout(3000)
 
-            # Check page
-            page_text = await page.locator("body").inner_text()
-
-            if "Ad Blocker Detected" in page_text:
-                raise Exception(
-                    "VoiceLime detected an ad blocker."
-                )
-
-            # =================================================
-            # TEXT BOX
-            # =================================================
+            print("VoiceLime opened.")
 
             text_area = page.locator("textarea").first
 
@@ -83,85 +65,6 @@ async def generate_voice(text: str) -> Path:
 
             print("Text entered.")
 
-            # =================================================
-            # SELECT LANGUAGE
-            # =================================================
-
-            selects = page.locator("select")
-
-            select_count = await selects.count()
-
-            print(
-                "Select elements:",
-                select_count
-            )
-
-            if select_count > 0:
-
-                try:
-                    await selects.nth(0).select_option(
-                        label="English"
-                    )
-
-                except Exception:
-
-                    try:
-                        await selects.nth(0).select_option(
-                            value="en"
-                        )
-
-                    except Exception:
-                        pass
-
-            # =================================================
-            # SELECT VOICE
-            # =================================================
-
-            if select_count > 1:
-
-                try:
-
-                    options = await selects.nth(1).locator(
-                        "option"
-                    ).all()
-
-                    for option in options:
-
-                        value = await option.get_attribute(
-                            "value"
-                        )
-
-                        label = await option.inner_text()
-
-                        if value and value.strip():
-
-                            try:
-
-                                await selects.nth(1).select_option(
-                                    value=value
-                                )
-
-                                print(
-                                    "Selected voice:",
-                                    label
-                                )
-
-                                break
-
-                            except Exception:
-                                continue
-
-                except Exception as e:
-
-                    print(
-                        "Voice selection warning:",
-                        e
-                    )
-
-            # =================================================
-            # GENERATE VOICE
-            # =================================================
-
             generate_button = page.get_by_role(
                 "button",
                 name="Generate Voice"
@@ -172,16 +75,11 @@ async def generate_voice(text: str) -> Path:
                 timeout=30000
             )
 
-            print("Generating voice...")
+            print("Clicking Generate Voice...")
 
             await generate_button.click()
 
-            # Wait for generation
             await page.wait_for_timeout(5000)
-
-            # =================================================
-            # DOWNLOAD MP3
-            # =================================================
 
             download_button = page.get_by_role(
                 "button",
@@ -208,8 +106,7 @@ async def generate_voice(text: str) -> Path:
             )
 
             print(
-                "Downloaded:",
-                output_file
+                f"MP3 saved: {output_file}"
             )
 
             return output_file
@@ -218,10 +115,6 @@ async def generate_voice(text: str) -> Path:
 
             await browser.close()
 
-
-# =========================================================
-# TELEGRAM MESSAGE HANDLER
-# =========================================================
 
 async def handle_message(
     update: Update,
@@ -241,10 +134,7 @@ async def handle_message(
     if not text:
         return
 
-    print(
-        "Received:",
-        text
-    )
+    print(f"Received: {text}")
 
     await update.message.reply_text(
         "🎙 Generating English voice..."
@@ -265,7 +155,6 @@ async def handle_message(
                 title="English Voice"
             )
 
-        # Delete temporary MP3
         try:
             audio_file.unlink()
         except Exception:
@@ -273,20 +162,13 @@ async def handle_message(
 
     except Exception as e:
 
-        print(
-            "ERROR:",
-            repr(e)
-        )
+        print(f"ERROR: {repr(e)}")
 
         await update.message.reply_text(
             "❌ Voice generation failed.\n\n"
-            f"Error: {str(e)}"
+            f"{str(e)}"
         )
 
-
-# =========================================================
-# MAIN
-# =========================================================
 
 def main():
 
@@ -317,8 +199,5 @@ def main():
     app.run_polling()
 
 
-# =========================================================
-# START
-# =========================================================
-
-if __
+if __name__ == "__main__":
+    main()
